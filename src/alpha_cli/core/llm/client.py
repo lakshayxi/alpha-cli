@@ -1,127 +1,91 @@
 import json
 import logging
-from typing import Optional, List, Dict, Any
+import subprocess
+import shutil
+from typing import Optional, Dict, Any
 from alpha_cli.core.llm.schema import AlphaGeneration
 from alpha_cli.config.settings import Credentials
-
-# Direct SDK imports
-import openai
-import anthropic
-from google import genai
-from google.genai import types
 
 logger = logging.getLogger(__name__)
 
 class LLMError(Exception):
-    """Raised when the cloud LLM fails to generate a valid response."""
+    """Raised when the delegated CLI tool fails to return a valid response."""
     pass
 
 class LLMClient:
     """
-    Interface for interacting with cloud-based Large Language Models.
-    Standardizes generation across different providers using direct SDKs.
-    Supports both explicit API keys and native web-based (OAuth) authentication.
+    Orchestrates alpha generation by delegating to specialized agent CLIs.
+    Supports integration with 'gemini' (Gemini CLI) and 'claude' (Claude Code).
+    Leverages existing local authentication sessions in these tools.
     """
     
-    PROVIDER_MODEL_MAP = {
-        "OpenAI": "gpt-4o",
-        "Anthropic": "claude-3-5-sonnet-20240620",
-        "Gemini": "gemini-1.5-pro"
-    }
-    
     def __init__(self, creds: Credentials):
-        self.provider = creds.llm_provider
-        self.model = self.PROVIDER_MODEL_MAP.get(self.provider, "gpt-4o")
-        self.api_key = creds.llm_api_key
-        self.use_cli_auth = creds.use_cli_auth
-        self.oauth_token_json = creds.oauth_token_json
-        
-        self._initialize_client()
+        self.provider = creds.llm_provider.lower()
+        self._verify_installation()
 
-    def _initialize_client(self) -> None:
-        """Initializes the specific provider's client or configuration."""
-        try:
-            if self.provider == "OpenAI":
-                self.client = openai.OpenAI(api_key=self.api_key)
-            elif self.provider == "Anthropic":
-                self.client = anthropic.Anthropic(api_key=self.api_key)
-            elif self.provider == "Gemini":
-                if self.use_cli_auth and self.oauth_token_json:
-                    from google.oauth2.credentials import Credentials as OAuthCredentials
-                    # Load the serialized tokens from the setup process
-                    creds_dict = json.loads(self.oauth_token_json)
-                    google_creds = OAuthCredentials.from_authorized_user_info(creds_dict)
-                    logger.info("Initializing Gemini client with captured OAuth session.")
-                    self.client = genai.Client(credentials=google_creds)
-                else:
-                    # Fallback to standard API key
-                    self.client = genai.Client(api_key=self.api_key)
-        except Exception as e:
-            raise LLMError(f"Failed to initialize {self.provider} client: {e}")
+    def _verify_installation(self) -> None:
+        """Ensures the required delegate CLI is available in the system PATH."""
+        if not shutil.which(self.provider):
+            error_msg = f"Delegated CLI '{self.provider}' not found in system PATH."
+            logger.error(error_msg)
+            raise LLMError(error_msg)
 
     def generate_alpha(self, prompt: str, system_prompt: str) -> AlphaGeneration:
-        """Requests the LLM to generate a new alpha ideation."""
+        """
+        Spawns a subprocess to call the selected agent CLI with the generation prompt.
+        """
+        full_context = f"{system_prompt}\n\n{prompt}"
+        
         try:
-            logger.debug(f"Sending request to {self.provider} ({self.model})...")
+            logger.info(f"Delegating generation to '{self.provider}' CLI...")
             
-            if self.provider == "OpenAI":
-                return self._call_openai(prompt, system_prompt)
-            elif self.provider == "Anthropic":
-                return self._call_anthropic(prompt, system_prompt)
-            elif self.provider == "Gemini":
-                return self._call_gemini(prompt, system_prompt)
+            if self.provider == "gemini":
+                return self._call_gemini_cli(full_context)
+            elif self.provider == "claude":
+                return self._call_claude_cli(full_context)
             else:
-                raise LLMError(f"Unsupported provider: {self.provider}")
+                raise LLMError(f"Delegation not implemented for provider: {self.provider}")
                 
         except Exception as e:
-            logger.error(f"LLM generation failed: {e}")
-            raise LLMError(f"LLM provider error: {e}")
+            logger.error(f"Delegated execution failure: {e}")
+            raise LLMError(f"CLI delegation error: {e}")
 
-    def _call_openai(self, prompt: str, system_prompt: str) -> AlphaGeneration:
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
-            response_format={"type": "json_object"},
-            timeout=120
-        )
-        content = response.choices[0].message.content
-        return AlphaGeneration(**json.loads(content))
-
-    def _call_anthropic(self, prompt: str, system_prompt: str) -> AlphaGeneration:
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=2000,
-            system=system_prompt,
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            timeout=120
-        )
-        content = response.content[0].text
+    def _call_gemini_cli(self, prompt: str) -> AlphaGeneration:
+        """Executes the gemini CLI in non-interactive mode."""
+        # Note: -p/--prompt is used for non-interactive (headless) mode in gemini cli
+        cmd = ["gemini", "--prompt", prompt, "--output-format", "json"]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        content = result.stdout.strip()
+        
+        if not content:
+            raise LLMError("Gemini CLI returned empty output.")
+            
         json_data = self._extract_json(content)
         return AlphaGeneration(**json_data)
 
-    def _call_gemini(self, prompt: str, system_prompt: str) -> AlphaGeneration:
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                response_mime_type="application/json"
-            )
-        )
-        return AlphaGeneration(**json.loads(response.text))
+    def _call_claude_cli(self, prompt: str) -> AlphaGeneration:
+        """Executes the Claude Code CLI (claude) in non-interactive mode."""
+        # Claude Code usually accepts prompts as a positional argument
+        cmd = ["claude", "-p", prompt]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        content = result.stdout.strip()
+        
+        if not content:
+            raise LLMError("Claude CLI returned empty output.")
+            
+        json_data = self._extract_json(content)
+        return AlphaGeneration(**json_data)
 
     def _extract_json(self, text: str) -> Dict[str, Any]:
-        """Helper to find and parse JSON block in case of conversational prefixes."""
+        """Surgically extracts and parses the JSON block from the CLI output."""
         try:
             return json.loads(text)
         except json.JSONDecodeError:
+            # Handle cases where the CLI outputs conversational text around the JSON
             start = text.find('{')
             end = text.rfind('}') + 1
             if start != -1 and end > 0:
                 return json.loads(text[start:end])
-            raise LLMError("Could not extract valid JSON from LLM response.")
+            raise LLMError("Failed to parse valid JSON from CLI output.")
