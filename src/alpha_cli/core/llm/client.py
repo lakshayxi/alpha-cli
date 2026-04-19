@@ -20,7 +20,7 @@ class LLMClient:
     """
     Interface for interacting with cloud-based Large Language Models.
     Standardizes generation across different providers using direct SDKs.
-    Supports both explicit API keys and CLI-based (OAuth) authentication.
+    Supports both explicit API keys and native web-based (OAuth) authentication.
     """
     
     PROVIDER_MODEL_MAP = {
@@ -34,6 +34,7 @@ class LLMClient:
         self.model = self.PROVIDER_MODEL_MAP.get(self.provider, "gpt-4o")
         self.api_key = creds.llm_api_key
         self.use_cli_auth = creds.use_cli_auth
+        self.oauth_token_json = creds.oauth_token_json
         
         self._initialize_client()
 
@@ -45,11 +46,15 @@ class LLMClient:
             elif self.provider == "Anthropic":
                 self.client = anthropic.Anthropic(api_key=self.api_key)
             elif self.provider == "Gemini":
-                if self.use_cli_auth:
-                    # Initializing WITHOUT api_key triggers OAuth/ADC discovery
-                    logger.info("Initializing Gemini client using CLI-based OAuth (ADC)...")
-                    self.client = genai.Client()
+                if self.use_cli_auth and self.oauth_token_json:
+                    from google.oauth2.credentials import Credentials as OAuthCredentials
+                    # Load the serialized tokens from the setup process
+                    creds_dict = json.loads(self.oauth_token_json)
+                    google_creds = OAuthCredentials.from_authorized_user_info(creds_dict)
+                    logger.info("Initializing Gemini client with captured OAuth session.")
+                    self.client = genai.Client(credentials=google_creds)
                 else:
+                    # Fallback to standard API key
                     self.client = genai.Client(api_key=self.api_key)
         except Exception as e:
             raise LLMError(f"Failed to initialize {self.provider} client: {e}")
@@ -100,7 +105,6 @@ class LLMClient:
         return AlphaGeneration(**json_data)
 
     def _call_gemini(self, prompt: str, system_prompt: str) -> AlphaGeneration:
-        # The genai.Client handles ADC automatically when initialized without a key
         response = self.client.models.generate_content(
             model=self.model,
             contents=prompt,

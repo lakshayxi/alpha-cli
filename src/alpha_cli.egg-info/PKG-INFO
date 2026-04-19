@@ -14,6 +14,7 @@ Requires-Dist: python-dotenv
 Requires-Dist: openai
 Requires-Dist: anthropic
 Requires-Dist: google-genai
+Requires-Dist: google-auth-oauthlib
 
 # alpha-cli 🚀
 

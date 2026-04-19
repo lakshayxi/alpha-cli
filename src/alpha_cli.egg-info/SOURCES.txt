@@ -27,6 +27,7 @@ src/alpha_cli/core/engine/optimizer.py
 src/alpha_cli/core/engine/orchestrator.py
 src/alpha_cli/core/llm/__init__.py
 src/alpha_cli/core/llm/client.py
+src/alpha_cli/core/llm/oauth.py
 src/alpha_cli/core/llm/prompt.py
 src/alpha_cli/core/llm/schema.py
 src/alpha_cli/core/storage/__init__.py

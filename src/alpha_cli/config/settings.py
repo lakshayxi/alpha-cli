@@ -21,6 +21,7 @@ class Credentials(BaseModel):
     default_region: str = "USA"
     default_universe: str = "TOP3000"
     use_cli_auth: bool = False # Flag for Gemini OAuth
+    oauth_token_json: Optional[str] = None # Serialized OAuth credentials
 
 class ConfigManager:
     """
@@ -51,9 +52,13 @@ class ConfigManager:
             with open(self.CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(config_data, f, indent=4)
                 
-            # Only store API key if not using CLI-based OAuth
+            # Store API key if applicable
             if not creds.use_cli_auth and creds.llm_api_key:
                 keyring.set_password(self.SERVICE_NAME, f"{creds.llm_provider}_api_key", creds.llm_api_key)
+            
+            # Store OAuth token if applicable
+            if creds.use_cli_auth and creds.oauth_token_json:
+                keyring.set_password(self.SERVICE_NAME, f"{creds.llm_provider}_oauth_token", creds.oauth_token_json)
             
             keyring.set_password(self.SERVICE_NAME, "brain_username", creds.brain_username)
             keyring.set_password(self.SERVICE_NAME, "brain_password", creds.brain_password)
@@ -74,14 +79,24 @@ class ConfigManager:
             use_cli_auth = config_data.get("use_cli_auth", False)
             
             api_key = None
-            if not use_cli_auth:
+            oauth_token_json = None
+            
+            if use_cli_auth:
+                oauth_token_json = keyring.get_password(self.SERVICE_NAME, f"{provider}_oauth_token")
+            else:
                 api_key = keyring.get_password(self.SERVICE_NAME, f"{provider}_api_key")
             
             username = keyring.get_password(self.SERVICE_NAME, "brain_username")
             password = keyring.get_password(self.SERVICE_NAME, "brain_password")
             
-            # For CLI auth, we don't need a stored API key
-            if not username or not password or (not use_cli_auth and not api_key):
+            # Validation check
+            if not username or not password:
+                return None
+            
+            if not use_cli_auth and not api_key:
+                return None
+            
+            if use_cli_auth and not oauth_token_json:
                 return None
                 
             return Credentials(
@@ -91,7 +106,8 @@ class ConfigManager:
                 brain_password=password,
                 default_region=config_data.get("default_region", "USA"),
                 default_universe=config_data.get("default_universe", "TOP3000"),
-                use_cli_auth=use_cli_auth
+                use_cli_auth=use_cli_auth,
+                oauth_token_json=oauth_token_json
             )
         except Exception as e:
             logger.error(f"Error loading configuration: {e}")

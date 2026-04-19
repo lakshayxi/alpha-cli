@@ -5,6 +5,7 @@ from rich.prompt import Prompt, Confirm
 from alpha_cli.config.settings import ConfigManager, Credentials, ConfigurationError
 import subprocess
 import sys
+import os
 
 app = typer.Typer(help="Interactive configuration and authentication wizard.")
 console = Console()
@@ -14,7 +15,7 @@ config_manager = ConfigManager()
 def setup_wizard(ctx: typer.Context):
     """
     Standardizes settings across the mining engine, offering both API key and 
-    CLI-based (OAuth) authentication for supported providers like Gemini.
+    native web-based (OAuth) authentication for supported providers like Gemini.
     """
     if ctx.invoked_subcommand is not None:
         return
@@ -36,26 +37,32 @@ def setup_wizard(ctx: typer.Context):
         # Step 2: Authentication Strategy
         api_key = None
         use_cli_auth = False
+        oauth_token_json = None
         
         if provider == "Gemini":
-            use_cli_auth = Confirm.ask("Use CLI-based sign-in (OAuth via Google Cloud)?")
+            use_cli_auth = Confirm.ask("Use web-based sign-in (Native OAuth)?")
             if use_cli_auth:
-                # Check for gcloud first
-                import shutil
-                if not shutil.which("gcloud"):
-                    console.print("\n[bold red]Error:[/bold red] 'gcloud' CLI is not installed.")
-                    console.print("To use CLI-based sign-in, please install the Google Cloud SDK:")
-                    console.print("  [cyan]https://cloud.google.com/sdk/docs/install[/cyan]\n")
-                    console.print("Reverting to API key authentication.")
+                console.print("\n[bold]Native Google OAuth Setup[/bold]")
+                console.print("To use native web login, you must provide an OAuth Desktop Client ID.")
+                console.print("1. Go to: [cyan]https://console.cloud.google.com/apis/credentials[/cyan]")
+                console.print("2. Create 'OAuth 2.0 Client ID' -> Application type: 'Desktop App'")
+                console.print("3. Copy your Client ID and Client Secret below.\n")
+                
+                client_id = Prompt.ask("Enter OAuth Client ID")
+                client_secret = Prompt.ask("Enter OAuth Client Secret", password=True)
+                
+                # Import here to avoid requiring dependency if not used
+                from alpha_cli.core.llm.oauth import GoogleOAuthHandler
+                handler = GoogleOAuthHandler()
+                
+                try:
+                    with console.status("[bold green]Waiting for browser authentication...[/bold green]"):
+                        oauth_token_json = handler.run_flow(client_id, client_secret)
+                    console.print("[green]Successfully acquired OAuth session.[/green]")
+                except Exception as e:
+                    console.print(f"[red]Error:[/red] Web login failed: {e}")
+                    console.print("Falling back to API key authentication.")
                     use_cli_auth = False
-                else:
-                    console.print("\n[bold yellow]Requirement:[/bold yellow] Initializing Google OAuth flow...")
-                    try:
-                        subprocess.run(["gcloud", "auth", "application-default", "login"], check=True)
-                        console.print("[green]CLI Sign-in process completed.[/green]")
-                    except (subprocess.CalledProcessError, Exception):
-                        console.print("[red]Error:[/red] Failed to trigger 'gcloud' login. Reverting to API key.")
-                        use_cli_auth = False
 
         if not use_cli_auth:
             api_key = Prompt.ask(f"Enter {provider} API Key", password=True)
@@ -78,12 +85,13 @@ def setup_wizard(ctx: typer.Context):
             brain_password=password,
             default_region=region,
             default_universe=universe,
-            use_cli_auth=use_cli_auth
+            use_cli_auth=use_cli_auth,
+            oauth_token_json=oauth_token_json
         )
 
         config_manager.save_credentials(creds)
         console.print("\n[bold green]Configuration persisted successfully.[/bold green]")
-        console.print(f"Provider: [bold]{provider}[/bold] | Auth Mode: [bold]{'CLI/OAuth' if use_cli_auth else 'API Key'}[/bold]")
+        console.print(f"Provider: [bold]{provider}[/bold] | Auth Mode: [bold]{'Web/OAuth' if use_cli_auth else 'API Key'}[/bold]")
         
     except ConfigurationError as e:
         console.print(f"\n[bold red]Configuration Failure:[/bold red] {e}")
