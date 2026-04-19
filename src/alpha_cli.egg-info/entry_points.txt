@@ -1,0 +1,2 @@
+[console_scripts]
+alpha-cli = alpha_cli.cli.main:app

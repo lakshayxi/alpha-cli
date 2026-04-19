@@ -1,7 +1,13 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "alpha-cli"
 version = "0.1.0"
 description = "Cloud LLM-Powered WorldQuant Brain Alpha Mining CLI"
+readme = "README.md"
+requires-python = ">=3.8"
 dependencies = [
     "typer[all]",
     "rich",
@@ -16,6 +22,6 @@ dependencies = [
 [project.scripts]
 alpha-cli = "alpha_cli.cli.main:app"
 
-[build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["alpha_cli*"]
