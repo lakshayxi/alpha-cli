@@ -40,15 +40,22 @@ def setup_wizard(ctx: typer.Context):
         if provider == "Gemini":
             use_cli_auth = Confirm.ask("Use CLI-based sign-in (OAuth via Google Cloud)?")
             if use_cli_auth:
-                console.print("\n[bold yellow]Requirement:[/bold yellow] Ensure you have the 'gcloud' CLI installed.")
-                console.print("We will now attempt to initialize the login flow...")
-                try:
-                    # Attempt to trigger the standard Google ADC login
-                    subprocess.run(["gcloud", "auth", "application-default", "login"], check=True)
-                    console.print("[green]CLI Sign-in process completed.[/green]")
-                except (subprocess.CalledProcessError, FileNotFoundError):
-                    console.print("[red]Error:[/red] Failed to trigger 'gcloud' login. Reverting to API key.")
+                # Check for gcloud first
+                import shutil
+                if not shutil.which("gcloud"):
+                    console.print("\n[bold red]Error:[/bold red] 'gcloud' CLI is not installed.")
+                    console.print("To use CLI-based sign-in, please install the Google Cloud SDK:")
+                    console.print("  [cyan]https://cloud.google.com/sdk/docs/install[/cyan]\n")
+                    console.print("Reverting to API key authentication.")
                     use_cli_auth = False
+                else:
+                    console.print("\n[bold yellow]Requirement:[/bold yellow] Initializing Google OAuth flow...")
+                    try:
+                        subprocess.run(["gcloud", "auth", "application-default", "login"], check=True)
+                        console.print("[green]CLI Sign-in process completed.[/green]")
+                    except (subprocess.CalledProcessError, Exception):
+                        console.print("[red]Error:[/red] Failed to trigger 'gcloud' login. Reverting to API key.")
+                        use_cli_auth = False
 
         if not use_cli_auth:
             api_key = Prompt.ask(f"Enter {provider} API Key", password=True)
