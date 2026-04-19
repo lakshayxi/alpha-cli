@@ -3,7 +3,7 @@ import logging
 import subprocess
 import shutil
 import re
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from alpha_cli.core.llm.schema import AlphaGeneration
 from alpha_cli.config.settings import Credentials
 
@@ -29,7 +29,7 @@ class LLMClient:
             raise LLMError(error_msg)
 
     def generate_alpha(self, prompt: str, system_prompt: str) -> AlphaGeneration:
-        full_context = f"{system_prompt}\n\n{prompt}"
+        full_context = f"{system_prompt}\n\nUser Request: {prompt}"
         
         try:
             logger.info(f"Delegating generation to '{self.provider}' CLI...")
@@ -42,26 +42,20 @@ class LLMClient:
                 raise LLMError(f"Delegation not implemented for provider: {self.provider}")
                 
         except subprocess.TimeoutExpired:
-            logger.error(f"Delegated CLI '{self.provider}' timed out after 180s.")
-            raise LLMError("AI Agent timed out. Please check your internet connection or active CLI session.")
+            raise LLMError("AI Agent timed out (180s).")
         except subprocess.CalledProcessError as e:
-            logger.error(f"Delegated CLI '{self.provider}' failed with exit code {e.returncode}.")
-            raise LLMError(f"CLI error: {e.stderr or e.stdout or 'Unknown error'}")
+            logger.error(f"CLI process failed: {e}")
+            raise LLMError(f"CLI returned error: {e.stderr or e.stdout}")
         except Exception as e:
             logger.error(f"Delegated execution failure: {e}")
             raise LLMError(f"CLI delegation error: {e}")
 
     def _call_gemini_cli(self, prompt: str) -> AlphaGeneration:
-        """
-        Executes gemini CLI.
-        Passing prompt via stdin to avoid shell argument length limits.
-        """
-        # gemini-cli accepts prompts via stdin when no positional argument is provided
-        cmd = ["gemini", "--output-format", "json"]
+        # Using output-format json to get structured session output
+        cmd = ["gemini", "--prompt", prompt, "--output-format", "json"]
         
         result = subprocess.run(
             cmd, 
-            input=prompt, 
             capture_output=True, 
             text=True, 
             check=True,
@@ -76,13 +70,7 @@ class LLMClient:
         return AlphaGeneration(**json_data)
 
     def _call_claude_cli(self, prompt: str) -> AlphaGeneration:
-        """
-        Executes Claude Code CLI.
-        Using the headless mode with input redirection.
-        """
-        # claude accepts prompts via stdin in headless mode
         cmd = ["claude"]
-        
         result = subprocess.run(
             cmd, 
             input=prompt, 
@@ -91,37 +79,53 @@ class LLMClient:
             check=True,
             timeout=180
         )
-        
         content = result.stdout.strip()
-        if not content:
-            raise LLMError("Claude CLI returned empty output.")
-            
         json_data = self._extract_json(content)
         return AlphaGeneration(**json_data)
 
     def _extract_json(self, text: str) -> Dict[str, Any]:
-        """Robust JSON extraction from potentially noisy CLI output."""
-        # 1. Try cleaning markdown code blocks
-        json_block_match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL | re.IGNORECASE)
-        if json_block_match:
-            try:
-                return json.loads(json_block_match.group(1))
-            except json.JSONDecodeError:
-                pass
+        """
+        Surgically extracts the AlphaGeneration object.
+        Supports un-nesting stringified JSON from CLI metadata wrappers.
+        """
+        # 1. Clean markdown if present
+        cleaned_text = re.sub(r'```json\s*', '', text, flags=re.IGNORECASE)
+        cleaned_text = re.sub(r'```', '', cleaned_text)
 
-        # 2. Recursive brace scan for largest valid JSON object
-        braces_match = re.search(r'(\{.*\})', text, re.DOTALL)
-        if braces_match:
-            potential_json = braces_match.group(1)
+        # 2. Extract all JSON objects using stack-based matching
+        candidates = []
+        stack = []
+        start = -1
+        for i, char in enumerate(cleaned_text):
+            if char == '{':
+                if not stack: start = i
+                stack.append(char)
+            elif char == '}':
+                if stack:
+                    stack.pop()
+                    if not stack: candidates.append(cleaned_text[start:i+1])
+
+        # 3. Validation and Deep Un-nesting
+        for candidate in candidates:
             try:
-                return json.loads(potential_json)
-            except json.JSONDecodeError:
-                # Surgical step-down
-                for i in range(len(potential_json), 0, -1):
-                    if potential_json[i-1] == '}':
+                data = json.loads(candidate)
+                
+                # Check if this object contains our target keys
+                if isinstance(data, dict):
+                    if 'expression' in data and 'thesis' in data:
+                        return data
+                    
+                    # LEARNING: Handle Gemini-CLI specific nesting (data['response'] is stringified JSON)
+                    if 'response' in data and isinstance(data['response'], str):
                         try:
-                            return json.loads(potential_json[:i])
+                            nested_data = json.loads(data['response'])
+                            if isinstance(nested_data, dict) and 'expression' in nested_data:
+                                return nested_data
                         except json.JSONDecodeError:
-                            continue
+                            # If response string isn't pure JSON, try extracting from it recursively
+                            return self._extract_json(data['response'])
+                            
+            except (json.JSONDecodeError, TypeError):
+                continue
 
-        raise LLMError(f"Agent did not return a valid JSON object. Raw preview: {text[:150]}...")
+        raise LLMError(f"Isolator failure: AlphaGeneration keys not found in output. Preview: {text[:150]}...")
