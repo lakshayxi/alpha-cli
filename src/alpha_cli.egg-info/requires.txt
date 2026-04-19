@@ -1,8 +1,10 @@
 typer[all]
 rich
-litellm
 requests
 pydantic
 cryptography
 keyring
 python-dotenv
+openai
+anthropic
+google-genai
