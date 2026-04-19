@@ -50,8 +50,20 @@ CORE DOMAIN PRINCIPLES:
         
         prompt += """
 OUTPUT SPECIFICATION:
-Return valid JSON only. 
-Schema: { "expression": str, "thesis": str, "recommended_settings": { "universe", "decay", "truncation", "neutralization", "lookback" } }
+You MUST return a valid JSON object ONLY. Do not include any conversational text, explanations, or thinking blocks before or after the JSON.
+
+Schema: 
+{ 
+    "expression": str, 
+    "thesis": str, 
+    "recommended_settings": { 
+        "universe": str, 
+        "decay": int, 
+        "truncation": float, 
+        "neutralization": str, 
+        "lookback": int 
+    } 
+}
 """
         return prompt
 

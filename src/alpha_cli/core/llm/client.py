@@ -2,6 +2,7 @@ import json
 import logging
 import subprocess
 import shutil
+import re
 from typing import Optional, Dict, Any
 from alpha_cli.core.llm.schema import AlphaGeneration
 from alpha_cli.config.settings import Credentials
@@ -15,8 +16,6 @@ class LLMError(Exception):
 class LLMClient:
     """
     Orchestrates alpha generation by delegating to specialized agent CLIs.
-    Supports integration with 'gemini' (Gemini CLI) and 'claude' (Claude Code).
-    Leverages existing local authentication sessions in these tools.
     """
     
     def __init__(self, creds: Credentials):
@@ -24,16 +23,12 @@ class LLMClient:
         self._verify_installation()
 
     def _verify_installation(self) -> None:
-        """Ensures the required delegate CLI is available in the system PATH."""
         if not shutil.which(self.provider):
             error_msg = f"Delegated CLI '{self.provider}' not found in system PATH."
             logger.error(error_msg)
             raise LLMError(error_msg)
 
     def generate_alpha(self, prompt: str, system_prompt: str) -> AlphaGeneration:
-        """
-        Spawns a subprocess to call the selected agent CLI with the generation prompt.
-        """
         full_context = f"{system_prompt}\n\n{prompt}"
         
         try:
@@ -51,9 +46,8 @@ class LLMClient:
             raise LLMError(f"CLI delegation error: {e}")
 
     def _call_gemini_cli(self, prompt: str) -> AlphaGeneration:
-        """Executes the gemini CLI in non-interactive mode."""
-        # Note: -p/--prompt is used for non-interactive (headless) mode in gemini cli
-        cmd = ["gemini", "--prompt", prompt, "--output-format", "json"]
+        # Request plain text first as the 'json' format in gemini-cli can be verbose/unpredictable
+        cmd = ["gemini", "--prompt", prompt]
         
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         content = result.stdout.strip()
@@ -65,27 +59,46 @@ class LLMClient:
         return AlphaGeneration(**json_data)
 
     def _call_claude_cli(self, prompt: str) -> AlphaGeneration:
-        """Executes the Claude Code CLI (claude) in non-interactive mode."""
-        # Claude Code usually accepts prompts as a positional argument
         cmd = ["claude", "-p", prompt]
-        
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         content = result.stdout.strip()
-        
         if not content:
             raise LLMError("Claude CLI returned empty output.")
-            
         json_data = self._extract_json(content)
         return AlphaGeneration(**json_data)
 
     def _extract_json(self, text: str) -> Dict[str, Any]:
-        """Surgically extracts and parses the JSON block from the CLI output."""
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            # Handle cases where the CLI outputs conversational text around the JSON
-            start = text.find('{')
-            end = text.rfind('}') + 1
-            if start != -1 and end > 0:
-                return json.loads(text[start:end])
-            raise LLMError("Failed to parse valid JSON from CLI output.")
+        """
+        Robust JSON extraction. 
+        Filters out markdown code blocks and internal session metadata.
+        """
+        # 1. Try cleaning markdown code blocks if present
+        json_block_match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL | re.IGNORECASE)
+        if json_block_match:
+            try:
+                return json.loads(json_block_match.group(1))
+            except json.JSONDecodeError:
+                pass
+
+        # 2. Find the largest substring that starts with { and ends with }
+        # This bypasses session IDs, diff logs, and other conversational noise
+        braces_match = re.search(r'(\{.*\})', text, re.DOTALL)
+        if braces_match:
+            # We try a greedy match first, but if it fails, we'll try a more surgical approach
+            potential_json = braces_match.group(1)
+            
+            # Step-down cleaning: find the last occurrence of }
+            # and verify it's the end of a valid JSON object
+            try:
+                # Basic attempt
+                return json.loads(potential_json)
+            except json.JSONDecodeError:
+                # If greedy failed, try to find the earliest closing brace that makes a valid object
+                for i in range(len(potential_json), 0, -1):
+                    if potential_json[i-1] == '}':
+                        try:
+                            return json.loads(potential_json[:i])
+                        except json.JSONDecodeError:
+                            continue
+
+        raise LLMError(f"Output verification failed. The CLI agent did not return a valid AlphaGeneration JSON object. Raw preview: {text[:200]}...")
