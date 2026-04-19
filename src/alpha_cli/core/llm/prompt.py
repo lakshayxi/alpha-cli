@@ -75,6 +75,14 @@ Schema: { "expression": str, "thesis": str, "recommended_settings": { "universe"
             for field in sampled_fields:
                 desc = field.get('description', 'No description available').replace('\n', ' ')
                 prompt_lines.append(f"- {field['id']}: {desc}")
+
+        if self.operators:
+            prompt_lines.append(f"\nOPERATOR CATALOG (Sample of {min(len(self.operators), 20)} operators):")
+            sampled_operators = random.sample(self.operators, min(len(self.operators), 20))
+            for op in sampled_operators:
+                name = op.get('name', 'Unknown')
+                desc = op.get('description', 'No description available').replace('\n', ' ')
+                prompt_lines.append(f"- {name}: {desc}")
             
         return "\n".join(prompt_lines)
 

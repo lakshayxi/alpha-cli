@@ -27,7 +27,15 @@ class BrainFetcher:
             response = self.session.get(f"{self.BASE_URL}/operators", timeout=30)
             response.raise_for_status()
             data = response.json()
-            operators = data.get('results', [])
+            
+            # Handle both direct list response and wrapped results
+            if isinstance(data, list):
+                operators = data
+            elif isinstance(data, dict):
+                operators = data.get('results', [])
+            else:
+                operators = []
+                
             logger.info(f"Retrieved {len(operators)} operators.")
             return operators
         except requests.RequestException as e:
@@ -57,7 +65,15 @@ class BrainFetcher:
             response = self.session.get(f"{self.BASE_URL}/data-fields", params=params, timeout=30)
             response.raise_for_status()
             data = response.json()
-            fields = data.get('results', [])
+            
+            # Handle both direct list response and wrapped results
+            if isinstance(data, list):
+                fields = data
+            elif isinstance(data, dict):
+                fields = data.get('results', [])
+            else:
+                fields = []
+                
             logger.info(f"Retrieved {len(fields)} fields for {region}:{universe}.")
             return fields
         except requests.RequestException as e:
