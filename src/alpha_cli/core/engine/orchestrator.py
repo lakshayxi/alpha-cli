@@ -87,7 +87,7 @@ class MiningOrchestrator:
         while current_opt_attempt <= 3:
             try:
                 with self.console.status(f"[bold magenta]Simulation effort {current_opt_attempt}...[/bold magenta]"):
-                    sim_url = self.simulator.submit_simulation(expression, settings)
+                    sim_url = self.simulator.submit_simulation(expression, settings, region, universe)
                     sim_data = self.simulator.poll_simulation(sim_url)
                 
                 # Determine error category for learning
