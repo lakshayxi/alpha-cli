@@ -1,0 +1,21 @@
+[project]
+name = "alpha-cli"
+version = "0.1.0"
+description = "Cloud LLM-Powered WorldQuant Brain Alpha Mining CLI"
+dependencies = [
+    "typer[all]",
+    "rich",
+    "litellm",
+    "requests",
+    "pydantic",
+    "cryptography",
+    "keyring",
+    "python-dotenv",
+]
+
+[project.scripts]
+alpha-cli = "alpha_cli.cli.main:app"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
